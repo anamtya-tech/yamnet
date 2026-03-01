@@ -104,7 +104,7 @@ To sync: copy `integration/yamnet_core.tflite` into the ODAS fork's `models/`.
 |------|---------|
 | [anamtya-tech/yamnet](https://github.com/anamtya-tech/yamnet) | **This repo** — model training, export, standalone C++ test |
 | [anamtya-tech/simulator](https://github.com/anamtya-tech/simulator) | Python Streamlit pipeline — dataset curation, scene rendering, ODAS analysis |
-| ODAS firmware fork *(repo TBD)* | C fork of [introlab/odas](https://github.com/introlab/odas) with embedded YAMNet SST event pipeline |
+| [anamtya-tech/chatak-odas](https://github.com/anamtya-tech/chatak-odas) | C fork of [introlab/odas](https://github.com/introlab/odas) with embedded YAMNet SST event pipeline |
 | [DaveGamble/cJSON](https://github.com/DaveGamble/cJSON) | JSON library (submodule in ODAS fork) |
 | [introlab/odas](https://github.com/introlab/odas) | Upstream ODAS (MIT) |
 
