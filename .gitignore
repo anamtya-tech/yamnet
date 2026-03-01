@@ -214,4 +214,28 @@ marimo/_lsp/
 __marimo__/
 
 # Streamlit
+.streamlit/
+
+# ── C / C++ build artefacts ──────────────────────────────────────────────────
+integration/build/
+integration/test_yamnet_api
+integration/yamnet_core/          # compiled binary dir
+*.o
+*.a
+*.so
+*.out
+
+# ── Model weights (large binary files) ───────────────────────────────────────
+# Track via Git LFS or download via export script.
+# Uncomment if NOT using Git LFS:
+# integration/*.tflite
+# integration/*.h5
+# export_out/**/*.tflite
+
+# ── Python virtual environment ────────────────────────────────────────────────
+tfenv/
+
+# ── Editor ────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
 .streamlit/secrets.toml
