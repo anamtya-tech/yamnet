@@ -13,25 +13,68 @@ runs YAMNet inside ODAS lives in a separate repo (see [Related Repos](#related-r
 ```
 .
 ├── integration/            ← C++ standalone classifier + integration tests
-│   ├── yamnet_classifier.h   Reference C++ API (C++ TFLite API)
-│   ├── yamnet_classifier.cpp
-│   ├── yamnet_core.tflite    Exported model (Dec 2025)
-│   ├── yamnet_class_map.csv  521-class label map
-│   ├── export_yamnet_core.py Model export from Keras → TFLite
-│   ├── test_yamnet_api.cpp   Standalone API test
-│   ├── build.sh / run.sh     Build & test scripts
-│   └── README.md             C++ integration guide
+│   ├── export_yamnet_core.py  Build yamnet_core/ SavedModel + TFLite from TFHub
+│   ├── yamnet_classifier.h/cpp  Reference C++ API (used as template for ODAS)
+│   └── yamnet_custom/         yamnet.h5 saved model + tflite test
 │
-├── export_out/             ← TFLite export artefacts
-│   ├── tf2/                  Keras SavedModel exports
-│   └── tflite/               Quantized & float TFLite models
+├── training/               ← YAMNet fine-tuning pipeline (NEW)
+│   ├── data_loader.py         WAV + labels.csv → mel patches + tf.data
+│   ├── train_yamnet.py        Two-phase fine-tuning (head freeze → top unfreeze)
+│   └── export_finetuned.py    Export fine-tuned model → TFLite + registry
 │
-└── models/                 ← git submodule: tensorflow/models (reference)
+├── model_store/            ← Model store
+│   ├── registry.json          Tracked: version history, class maps, accuracy
+│   ├── base/                  (gitignored) yamnet_core/ SavedModel weights
+│   ├── checkpoints/           (gitignored) training run outputs
+│   └── releases/              (gitignored) versioned TFLite files for ODAS
+│
+└── models/ (submodule)     ← tensorflow/models (yamnet layer defs, read-only)
 ```
 
 ---
 
-## Quick start — export a fresh model
+## Quick start — fine-tune on custom wildlife data
+
+Dataset creation happens in the **simulator** repo (`yamnet_dataset_curator.py`).
+Once you have a curator dataset, run:
+
+```bash
+# From ~/yamnet/, with tfenv activated
+source tfenv/bin/activate
+
+# 1. (First time) Export the base yamnet_core SavedModel
+python integration/export_yamnet_core.py
+# → writes  integration/yamnet_core/   (SavedModel)
+# → writes  integration/yamnet_core.tflite
+
+# Move base SavedModel to the model store
+mkdir -p model_store/base
+cp -r integration/yamnet_core  model_store/base/yamnet_core_savedmodel
+
+# 2. Fine-tune
+python training/train_yamnet.py \
+    --dataset ~/simulator/outputs/yamnet_datasets/yamnet_train_001 \
+    --savedmodel model_store/base/yamnet_core_savedmodel \
+    --phase1-epochs 20 \
+    --phase2-epochs 30
+# → writes model_store/checkpoints/chatak_yamnet_<timestamp>/model.keras
+
+# 3. Export to TFLite for ODAS
+python training/export_finetuned.py \
+    --checkpoint model_store/checkpoints/chatak_yamnet_<timestamp> \
+    --version v1.0.0
+# → writes model_store/releases/v1.0.0/chatak_yamnet_v1.0.0.tflite
+# → writes model_store/releases/v1.0.0/custom_class_map.csv
+
+# 4. Deploy to ODAS
+cp model_store/releases/v1.0.0/chatak_yamnet_v1.0.0.tflite ~/sodas/
+cp model_store/releases/v1.0.0/custom_class_map.csv        ~/sodas/
+# Update raw.model_path and raw.class_map_path in your .cfg
+```
+
+---
+
+## Quick start — export a fresh base model
 
 ```bash
 # 1. Create Python environment

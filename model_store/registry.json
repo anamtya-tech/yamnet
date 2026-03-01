@@ -1,0 +1,6 @@
+{
+  "schema_version": "1",
+  "models": [],
+  "active_model": null,
+  "_comment": "Managed by training/train_yamnet.py and training/export_finetuned.py. Binary model files live in model_store/releases/ (gitignored). Only this registry is tracked."
+}

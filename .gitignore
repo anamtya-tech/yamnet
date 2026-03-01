@@ -216,6 +216,15 @@ __marimo__/
 # Streamlit
 .streamlit/
 
+# ── Model store (large binary files — tracked via registry.json only) ────────
+model_store/base/*
+model_store/checkpoints/*
+model_store/releases/*
+model_store/embeddings_cache/
+!model_store/base/.gitkeep
+!model_store/checkpoints/.gitkeep
+!model_store/releases/.gitkeep
+
 # ── C / C++ build artefacts ──────────────────────────────────────────────────
 integration/build/
 integration/test_yamnet_api
