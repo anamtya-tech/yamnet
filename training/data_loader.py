@@ -200,6 +200,69 @@ def load_patches_for_split(
     return X, y
 
 
+def compute_class_weights(
+    dataset_dir,
+    class_to_idx: Dict[str, int] | None = None,
+    weight_floor: float = 0.0,
+) -> Dict[int, float]:
+    """
+    Compute balanced class weights from the training fold of labels.csv.
+
+    Uses sklearn's balanced formula:  w_i = N_total / (N_classes × count_i)
+
+    weight_floor: if > 0, any weight below this value is clamped up to it.
+                  Useful to prevent the majority class from being suppressed
+                  too aggressively (e.g. weight_floor=0.5 for background).
+
+    Returns dict {class_index: weight} suitable for model.fit(class_weight=...).
+    Prints a per-class table so weights are visible in the training log.
+    """
+    try:
+        from sklearn.utils.class_weight import compute_class_weight as _skl_cw
+    except ImportError:
+        print("  [WARNING] scikit-learn not installed — skipping class weights")
+        return {}
+
+    dataset_dir = Path(dataset_dir)
+    labels_csv  = dataset_dir / "labels.csv"
+
+    if class_to_idx is None:
+        _, class_to_idx = build_label_map(labels_csv)
+
+    train_labels: List[int] = []
+    with open(labels_csv, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            fold = row.get("fold", "train")
+            if fold == "train" and row["label"] in class_to_idx:
+                train_labels.append(class_to_idx[row["label"]])
+
+    if not train_labels:
+        return {}
+
+    classes_arr = np.array(sorted(set(train_labels)))
+    weights     = _skl_cw(
+        class_weight="balanced",
+        classes=classes_arr,
+        y=np.array(train_labels),
+    )
+    cw = {int(c): float(w) for c, w in zip(classes_arr, weights)}
+
+    if weight_floor > 0.0:
+        clamped = {c: max(w, weight_floor) for c, w in cw.items()}
+        n_clamped = sum(1 for c in cw if cw[c] < weight_floor)
+        if n_clamped:
+            print(f"  Applying weight floor {weight_floor} ({n_clamped} class(es) clamped up)")
+        cw = clamped
+
+    idx_to_class = {v: k for k, v in class_to_idx.items()}
+    print("  Class weights (balanced):")
+    for idx in sorted(cw):
+        name = idx_to_class.get(idx, str(idx))
+        print(f"    [{idx:2d}] {name:<20s}: {cw[idx]:.3f}")
+
+    return cw
+
+
 def load_dataset(
     dataset_dir: str,
     batch_size: int = 32,
@@ -263,7 +326,7 @@ def load_dataset(
         oh = tf.one_hot(y, num_classes)
         ds = tf.data.Dataset.from_tensor_slices((X.astype(np.float32), oh))
         if shuffle:
-            ds = ds.shuffle(len(X), reseed_each_iteration=True)
+            ds = ds.shuffle(len(X), reshuffle_each_iteration=True)
         if augment:
             def _aug(patch, label):
                 noise = tf.random.normal(tf.shape(patch), stddev=0.02)

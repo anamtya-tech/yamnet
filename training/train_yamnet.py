@@ -45,6 +45,29 @@ from pathlib import Path
 import numpy as np
 import tensorflow as tf
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Focal loss
+# ─────────────────────────────────────────────────────────────────────────────
+
+def focal_loss(gamma: float = 2.0):
+    """
+    Multi-class focal loss: FL(p_t) = -(1 - p_t)^gamma * log(p_t)
+
+    gamma=0  → plain categorical cross-entropy
+    gamma=2  → standard RetinaNet default; down-weights easy examples strongly
+
+    Expects one-hot encoded labels (same format as categorical_crossentropy).
+    """
+    def _loss(y_true, y_pred):
+        y_pred   = tf.clip_by_value(y_pred, 1e-7, 1.0 - 1e-7)
+        ce       = -y_true * tf.math.log(y_pred)                  # (B, C)
+        p_t      = tf.reduce_sum(y_true * y_pred, axis=-1, keepdims=True)  # (B,1)
+        fl       = tf.pow(1.0 - p_t, gamma) * ce                  # (B, C)
+        return tf.reduce_mean(tf.reduce_sum(fl, axis=-1))          # scalar
+    _loss.__name__ = f"focal_loss_g{gamma}"
+    return _loss
+
+
 # ── Resolve repo root (so the script works from any cwd) ────────────────────
 SCRIPT_DIR   = Path(__file__).resolve().parent
 REPO_ROOT    = SCRIPT_DIR.parent
@@ -143,27 +166,48 @@ def _load_from_savedmodel(
     savedmodel_path: str,
     params,
 ) -> bool:
-    """Transfer backbone weights from a local yamnet_core SavedModel."""
+    """Transfer backbone weights from a local yamnet_core SavedModel.
+
+    Uses tf.saved_model.load() directly — no tensorflow_hub dependency.
+    The SavedModel variables are named without a model-name prefix
+    (e.g. "layer1/conv/kernel:0"), while the finetuned model variables
+    carry a "yamnet_finetuned/" prefix that we strip before matching.
+    """
     try:
-        import params as params_module  # type: ignore[import]
-        from export_yamnet_core import yamnet_core_model  # type: ignore[import]
+        saved = tf.saved_model.load(savedmodel_path)
 
-        # Build reference model (521-class) and load SavedModel weights
-        ref_model = yamnet_core_model(params)
-        ref_model.load_weights(savedmodel_path)
+        # Build name → variable map; strip trailing ":0" for lookup keys
+        src_by_name: dict = {}
+        for v in saved.variables:
+            key = v.name[:-2] if v.name.endswith(":0") else v.name
+            src_by_name[key] = v
 
-        # Copy all backbone variables (everything before the new head)
-        head_names = {"head_fc/kernel", "head_fc/bias",
-                      "custom_predictions/kernel", "custom_predictions/bias"}
-        src_vars = {v.name: v for v in ref_model.variables}
+        # Fragments that identify head-only variables (must NOT be overwritten)
+        head_keys = {"head_fc", "head_dropout", "custom_predictions",
+                     "logits", "predictions"}
+
         copied = 0
         for var in model.variables:
-            # Strip the model-name prefix for matching
-            short = "/".join(var.name.split("/")[1:])
-            if short in head_names:
+            # Skip any variable that belongs to the custom head
+            if any(k in var.name for k in head_keys):
                 continue
-            if short in src_vars and src_vars[short].shape == var.shape:
-                var.assign(src_vars[short])
+            # Strip ":0" suffix to get the lookup key
+            name = var.name
+            if name.endswith(":0"):
+                name = name[:-2]
+
+            # Strategy 1: exact match (tf_keras/Keras-2 — no model-name prefix)
+            if name in src_by_name and src_by_name[name].shape == var.shape:
+                var.assign(src_by_name[name])
+                copied += 1
+                continue
+
+            # Strategy 2: strip one-level model-name prefix (Keras-3 style:
+            #   "yamnet_finetuned/layer1/conv/kernel" → "layer1/conv/kernel")
+            parts = name.split("/", 1)
+            short = parts[1] if len(parts) > 1 else parts[0]
+            if short in src_by_name and src_by_name[short].shape == var.shape:
+                var.assign(src_by_name[short])
                 copied += 1
 
         print(f"  ✓ Copied {copied} backbone variables from SavedModel")
@@ -206,6 +250,41 @@ def _load_from_hub(model: tf.keras.Model, hub_url: str, params) -> bool:
         print(f"  ✗ TFHub load failed: {exc}")
         return False
 
+def _load_from_keras_checkpoint(
+    model           : tf.keras.Model,
+    checkpoint_path : str,
+) -> int:
+    """Warm-start from an existing fine-tuned model.keras.
+
+    Transfers all variables with matching names AND shapes.
+    custom_predictions is automatically skipped when num_classes differs,
+    so this works whether the new dataset has the same or different class count.
+
+    Returns the number of variables copied.
+    """
+    try:
+        ckpt = tf.keras.models.load_model(checkpoint_path, compile=False)
+        src  = {v.name: v for v in ckpt.variables}
+        copied = skipped_shape = skipped_missing = 0
+        for var in model.variables:
+            s = src.get(var.name)
+            if s is None:
+                skipped_missing += 1
+            elif s.shape != var.shape:
+                skipped_shape += 1
+            else:
+                var.assign(s)
+                copied += 1
+        print(f"  ✓ Warm-start: {copied} variables transferred, "
+              f"{skipped_shape} shape-mismatch (new head ok), "
+              f"{skipped_missing} not in source")
+        return copied
+    except Exception as exc:
+        print(f"  ✗ Warm-start load failed: {exc}")
+        return 0
+
+
+
 
 def unfreeze_top_layers(model: tf.keras.Model, n_layers: int = 4) -> None:
     """
@@ -238,6 +317,9 @@ def train(
     output_dir:     str   = "model_store/checkpoints",
     unfreeze_top:   int   = 4,
     run_name:       str | None = None,
+    focal_gamma:    float = 0.0,
+    weight_floor:   float = 0.0,
+    warm_start_path : str | None = None,
 ) -> Path:
     """
     Full two-phase training pipeline.
@@ -245,7 +327,7 @@ def train(
     Returns the path to the output checkpoint directory.
     """
     # Import here so the module is usable without a full TF install
-    from data_loader import load_dataset  # relative import within training/
+    from data_loader import load_dataset, compute_class_weights  # relative import within training/
 
     # ── Timestamp run ────────────────────────────────────────────────────────
     ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -265,6 +347,19 @@ def train(
     if num_classes < 2:
         raise ValueError(f"Need ≥ 2 classes, got {num_classes}: {classes}")
 
+    # ── Loss function selection ──────────────────────────────────────────────
+    if focal_gamma > 0.0:
+        loss_fn = focal_loss(gamma=focal_gamma)
+        class_weight = {}   # focal loss makes per-class weights redundant
+        print(f"\nUsing focal loss (gamma={focal_gamma}) — class weights disabled")
+    else:
+        loss_fn = "categorical_crossentropy"
+        # ── Compute balanced class weights ───────────────────────────────────
+        print("\nComputing class weights …")
+        class_weight = compute_class_weights(dataset_dir, weight_floor=weight_floor)
+        if not class_weight:
+            print("  [WARNING] No class weights computed — training without weighting")
+
     # ── Save class map ───────────────────────────────────────────────────────
     class_map_path = ckpt_dir / "class_map.csv"
     with open(class_map_path, "w") as f:
@@ -280,6 +375,15 @@ def train(
         hub_url=hub_url,
     )
     model.summary(line_length=90, expand_nested=False)
+
+    # ── Warm-start from an existing checkpoint (optional) ────────────────────
+    if warm_start_path and Path(warm_start_path).exists():
+        print(f"\nWarm-starting backbone from: {warm_start_path}")
+        n = _load_from_keras_checkpoint(model, warm_start_path)
+        if n == 0:
+            print("  ⚠ No variables transferred — using pretrained YAMNet weights")
+    elif warm_start_path:
+        print(f"\n⚠ Warm-start path not found: {warm_start_path} — ignoring")
 
     # ── Common callbacks ─────────────────────────────────────────────────────
     tensorboard_dir = ckpt_dir / "logs"
@@ -306,13 +410,14 @@ def train(
 
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
-        loss="categorical_crossentropy",
+        loss=loss_fn,
         metrics=["accuracy"],
     )
     history_p1 = model.fit(
         train_ds, validation_data=val_ds,
         epochs=phase1_epochs,
         callbacks=_callbacks("phase1"),
+        class_weight=class_weight or None,
         verbose=1,
     )
     best_val_p1 = max(history_p1.history.get("val_accuracy", [0.0]))
@@ -328,13 +433,14 @@ def train(
         unfreeze_top_layers(model, n_layers=unfreeze_top)
         model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
-            loss="categorical_crossentropy",
+            loss=loss_fn,
             metrics=["accuracy"],
         )
         history_p2 = model.fit(
             train_ds, validation_data=val_ds,
             epochs=phase2_epochs,
             callbacks=_callbacks("phase2"),
+            class_weight=class_weight or None,
             verbose=1,
         )
         best_val_p2 = max(history_p2.history.get("val_accuracy", [0.0]))
@@ -364,6 +470,10 @@ def train(
         "phase1_epochs": len(history_p1.epoch) if history_p1 else 0,
         "phase2_epochs": len(history_p2.epoch) if history_p2 else 0,
         "unfreeze_top":  unfreeze_top,
+        "focal_gamma":    focal_gamma,
+        "weight_floor":   weight_floor,
+        "class_weight":  {classes[i]: round(w, 4) for i, w in class_weight.items()} if class_weight else {},
+        "warm_start":    str(warm_start_path) if warm_start_path else None,
         "test_accuracy": float(test_acc),
         "test_loss":     float(test_loss),
         "model_path":    str(model_path),
@@ -413,8 +523,20 @@ def _update_registry(
     registry["models"] = [
         m for m in registry["models"] if m.get("run_name") != run_name
     ]
+
+    # Read nickname from meta.json written by yamnet_finetuner.py at launch
+    nickname = ""
+    meta_path = Path(model_path).parent / "meta.json"
+    if meta_path.exists():
+        try:
+            import json as _json2
+            nickname = _json2.loads(meta_path.read_text()).get("nickname", "")
+        except Exception:
+            pass
+
     registry["models"].append({
         "run_name":        run_name,
+        "nickname":        nickname,
         "timestamp":       timestamp,
         "classes":         classes,
         "num_classes":     len(classes),
@@ -456,6 +578,17 @@ def _parse_args():
                    help="Parent directory for checkpoint runs")
     p.add_argument("--run-name",      default=None,
                    help="Override the auto-generated run name")
+    p.add_argument("--focal-gamma",   type=float, default=0.0,
+                   help="Gamma for focal loss (0 = disabled, use class weights instead). "
+                        "Recommended: 2.0")
+    p.add_argument("--warm-start",    default=None,
+                   help="Path to a .keras checkpoint to warm-start backbone "
+                        "weights from (backbone + head_fc transferred; "
+                        "custom_predictions skipped when num_classes differs)")
+    p.add_argument("--weight-floor",  type=float, default=0.0,
+                   help="Minimum class weight floor — clamps majority-class weights up "
+                        "to this value (e.g. 0.5 prevents background being suppressed "
+                        "too aggressively). Only used when --focal-gamma=0.")
     return p.parse_args()
 
 
@@ -476,4 +609,7 @@ if __name__ == "__main__":
         batch_size      = args.batch_size,
         output_dir      = args.output_dir,
         run_name        = args.run_name,
+        focal_gamma     = args.focal_gamma,
+        weight_floor    = args.weight_floor,
+        warm_start_path = args.warm_start,
     )

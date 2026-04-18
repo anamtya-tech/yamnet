@@ -126,12 +126,18 @@ def export_tflite(
 
 
 def write_class_map(classes: list[str], output_path: Path) -> None:
-    """Write a CSV class map compatible with the ODAS C++ loader."""
+    """Write a CSV class map compatible with the ODAS C++ loader.
+
+    The ODAS yamnet_classifier.cpp LoadClassNames() parser always reads
+    fields[2] as display_name, so the CSV must have 3 columns:
+        index,mid,display_name
+    A dummy /m/custom_<i> mid value is used for custom classes.
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:
-        f.write("index,display_name\n")
+        f.write("index,mid,display_name\n")
         for i, c in enumerate(classes):
-            f.write(f"{i},{c}\n")
+            f.write(f"{i},/m/custom_{i},{c}\n")
     print(f"  Class map → {output_path}")
 
 
