@@ -49,22 +49,40 @@ import tensorflow as tf
 # Focal loss
 # ─────────────────────────────────────────────────────────────────────────────
 
-def focal_loss(gamma: float = 2.0):
+def focal_loss(gamma: float = 2.0, alpha: "dict | None" = None):
     """
-    Multi-class focal loss: FL(p_t) = -(1 - p_t)^gamma * log(p_t)
+    Alpha-weighted multi-class focal loss.
 
-    gamma=0  → plain categorical cross-entropy
-    gamma=2  → standard RetinaNet default; down-weights easy examples strongly
+        FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t)
+
+    gamma=0, alpha=None  -> plain categorical cross-entropy
+    gamma=2              -> standard RetinaNet default; down-weights easy examples
+    alpha                -> per-class inverse-frequency weights {class_idx: weight}
+                           Up-weights rare class (e.g. elephant) so its errors cost
+                           more than easy background samples.
+
+    Using BOTH gamma>0 AND alpha is the recommended setting for severe class
+    imbalance: alpha corrects the prior, gamma corrects the easy/hard imbalance.
 
     Expects one-hot encoded labels (same format as categorical_crossentropy).
     """
+    # Build a constant weight vector once, outside the hot path
+    alpha_vec = None
+    if alpha:
+        max_idx   = max(alpha.keys())
+        alpha_arr = [alpha.get(i, 1.0) for i in range(max_idx + 1)]
+        alpha_vec = tf.constant(alpha_arr, dtype=tf.float32)   # (C,)
+
     def _loss(y_true, y_pred):
-        y_pred   = tf.clip_by_value(y_pred, 1e-7, 1.0 - 1e-7)
-        ce       = -y_true * tf.math.log(y_pred)                  # (B, C)
-        p_t      = tf.reduce_sum(y_true * y_pred, axis=-1, keepdims=True)  # (B,1)
-        fl       = tf.pow(1.0 - p_t, gamma) * ce                  # (B, C)
-        return tf.reduce_mean(tf.reduce_sum(fl, axis=-1))          # scalar
-    _loss.__name__ = f"focal_loss_g{gamma}"
+        y_pred = tf.clip_by_value(y_pred, 1e-7, 1.0 - 1e-7)
+        ce     = -y_true * tf.math.log(y_pred)                      # (B, C)
+        p_t    = tf.reduce_sum(y_true * y_pred, axis=-1, keepdims=True)  # (B,1)
+        fl     = tf.pow(1.0 - p_t, gamma) * ce                     # (B, C)
+        if alpha_vec is not None:
+            fl = fl * tf.reshape(alpha_vec, (1, -1))                # alpha per class
+        return tf.reduce_mean(tf.reduce_sum(fl, axis=-1))           # scalar
+
+    _loss.__name__ = f"focal_loss_g{gamma}_alpha{'yes' if alpha else 'no'}"
     return _loss
 
 
@@ -347,18 +365,28 @@ def train(
     if num_classes < 2:
         raise ValueError(f"Need ≥ 2 classes, got {num_classes}: {classes}")
 
-    # ── Loss function selection ──────────────────────────────────────────────
+    # ── Compute inverse-frequency alpha weights (always) ────────────────
+    # Used as alpha in focal loss AND as Keras class_weight when focal is off.
+    # For severe imbalance (background >> elephant) these weights up-penalise
+    # every missed elephant relative to an easy background sample.
+    print("\nComputing class weights ...")
+    class_weight = compute_class_weights(dataset_dir, weight_floor=weight_floor)
+    if not class_weight:
+        print("  [WARNING] No class weights computed — training without weighting")
+
+    # ── Loss function selection ──────────────────────────────────────────────────────
+    # focal_gamma=2.0 is recommended for wildlife detection (rare class vs background).
+    # It activates BOTH alpha weighting (corrects class prior) AND focal modulation
+    # (down-weights easy background samples so the model focuses on rare events).
+    # Alpha is embedded inside the loss; Keras class_weight is cleared to avoid
+    # double-counting.
     if focal_gamma > 0.0:
-        loss_fn = focal_loss(gamma=focal_gamma)
-        class_weight = {}   # focal loss makes per-class weights redundant
-        print(f"\nUsing focal loss (gamma={focal_gamma}) — class weights disabled")
+        loss_fn      = focal_loss(gamma=focal_gamma, alpha=class_weight)
+        class_weight = {}   # alpha already inside loss; don't double-count
+        print(f"\nUsing alpha-weighted focal loss  (gamma={focal_gamma}, alpha=per-class inverse-freq)")
     else:
         loss_fn = "categorical_crossentropy"
-        # ── Compute balanced class weights ───────────────────────────────────
-        print("\nComputing class weights …")
-        class_weight = compute_class_weights(dataset_dir, weight_floor=weight_floor)
-        if not class_weight:
-            print("  [WARNING] No class weights computed — training without weighting")
+        print("\nUsing categorical cross-entropy with Keras class_weight")
 
     # ── Save class map ───────────────────────────────────────────────────────
     class_map_path = ckpt_dir / "class_map.csv"
@@ -408,15 +436,20 @@ def train(
     print(f"Phase 1 — head only  (lr=1e-3, max {phase1_epochs} epochs)")
     print("─" * 70)
 
+    # Per-class recall — val_recall_cls1 = "what fraction of real elephants did we catch?"
+    recall_metrics = [
+        tf.keras.metrics.Recall(class_id=i, name=f"recall_cls{i}")
+        for i in range(num_classes)
+    ]
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
         loss=loss_fn,
-        metrics=["accuracy"],
+        metrics=["accuracy"] + recall_metrics,
     )
     history_p1 = model.fit(
         train_ds, validation_data=val_ds,
         epochs=phase1_epochs,
-        callbacks=_callbacks("phase1"),
+        callbacks=_callbacks("phase1", monitor="val_loss"),
         class_weight=class_weight or None,
         verbose=1,
     )
@@ -434,12 +467,12 @@ def train(
         model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
             loss=loss_fn,
-            metrics=["accuracy"],
+            metrics=["accuracy"] + recall_metrics,
         )
         history_p2 = model.fit(
             train_ds, validation_data=val_ds,
             epochs=phase2_epochs,
-            callbacks=_callbacks("phase2"),
+            callbacks=_callbacks("phase2", monitor="val_loss"),
             class_weight=class_weight or None,
             verbose=1,
         )
@@ -473,6 +506,14 @@ def train(
         "focal_gamma":    focal_gamma,
         "weight_floor":   weight_floor,
         "class_weight":  {classes[i]: round(w, 4) for i, w in class_weight.items()} if class_weight else {},
+        "val_recall_per_class": {
+            classes[i]: round(float(
+                max((history_p2.history.get(f"val_recall_cls{i}") or [])
+                    if history_p2 else []
+                    or (history_p1.history.get(f"val_recall_cls{i}") or [0]))
+            ), 4)
+            for i in range(num_classes)
+        } if history_p1 else {},
         "warm_start":    str(warm_start_path) if warm_start_path else None,
         "test_accuracy": float(test_acc),
         "test_loss":     float(test_loss),

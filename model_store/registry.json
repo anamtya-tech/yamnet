@@ -212,8 +212,28 @@
       "version": "v1.0.0",
       "exported_at": "20260414_060858",
       "nickname": "ODAS only dataset\u2014 best so far, 63.6% (deployed)"
+    },
+    {
+      "run_name": "fixed-ambient-ele-fg-dr",
+      "nickname": "fixed-ambient-ele-fg-dr",
+      "timestamp": "20260426_054624",
+      "classes": [
+        "Elephant",
+        "Frog",
+        "background",
+        "drone_bebop"
+      ],
+      "num_classes": 4,
+      "val_accuracy": 0.8580645322799683,
+      "model_path": "/home/azureuser/yamnet/model_store/checkpoints/fixed-ambient-ele-fg-dr/model.keras",
+      "tflite_path": "/home/azureuser/yamnet/model_store/releases/v1.0.0/chatak_yamnet_v1.0.0.tflite",
+      "tflite_int8_path": "/home/azureuser/yamnet/model_store/releases/v1.0.0/chatak_yamnet_v1.0.0_int8.tflite",
+      "dataset": "/home/azureuser/simulator/outputs/gt_datasets/gt_FixedAmbient_20260426",
+      "deployed": true,
+      "version": "v1.0.0",
+      "exported_at": "20260426_055018"
     }
   ],
-  "active_model": "chatak_yamnet_20260414_060037",
+  "active_model": "fixed-ambient-ele-fg-dr",
   "_comment": "Managed by training/train_yamnet.py and training/export_finetuned.py. Binary model files live in model_store/releases/ (gitignored). Only this registry is tracked."
 }
