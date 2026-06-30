@@ -232,6 +232,44 @@
       "deployed": true,
       "version": "v1.0.0",
       "exported_at": "20260426_055018"
+    },
+    {
+      "run_name": "chatak_yamnet_specaug_ft",
+      "nickname": "backbone FT + SpecAugment (7-class, ~0.62)",
+      "timestamp": "20260630",
+      "classes": [
+        "Bear",
+        "Elephant",
+        "Frog",
+        "Lion",
+        "background",
+        "drone_bebop",
+        "drone_binary"
+      ],
+      "num_classes": 7,
+      "val_accuracy": 0.62,
+      "model_path": "/Users/abhinav/research/experiments/sim/checkpoints/yamnet_finetuned.keras",
+      "tflite_path": "/Users/abhinav/research/yamnet/model_store/releases/v2.0.0-specaug/chatak_yamnet_v2.0.0-specaug.tflite",
+      "tflite_int8_path": null,
+      "dataset": "/Users/abhinav/research/experiments/corpus (7251 post-ODAS samples, 4 ambient envs, 3 SNRs)",
+      "deployed": false,
+      "version": "v2.0.0-specaug",
+      "exported_at": "20260630",
+      "metrics": {
+        "overall_test": 0.62,
+        "mixed_test": 0.61,
+        "train_test_gap": 0.13,
+        "per_class": {
+          "Lion": 0.9,
+          "Frog": 0.68,
+          "Elephant": 0.54,
+          "Bear": 0.53,
+          "drone_bebop": 0.54,
+          "background": 0.64,
+          "drone_binary": 0.19
+        }
+      },
+      "notes": "separate experiments/ track; breaks ~0.50 ceiling via SpecAugment"
     }
   ],
   "active_model": "fixed-ambient-ele-fg-dr",
