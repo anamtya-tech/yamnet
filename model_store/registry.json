@@ -144,7 +144,7 @@
       "tflite_path": "/home/azureuser/yamnet/model_store/releases/v1.0.0/chatak_yamnet_v1.0.0.tflite",
       "tflite_int8_path": "/home/azureuser/yamnet/model_store/releases/v1.0.0/chatak_yamnet_v1.0.0_int8.tflite",
       "dataset": "/home/azureuser/simulator/outputs/gt_datasets/_staged/merged_20260411_101103_c43424cf",
-      "deployed": true,
+      "deployed": false,
       "version": "v1.0.0",
       "exported_at": "20260411_222051",
       "nickname": "GT merged v1 \u2014 weight floor=0.5, 53.7%"
@@ -208,7 +208,7 @@
       "tflite_path": "/home/azureuser/yamnet/model_store/releases/v1.0.0/chatak_yamnet_v1.0.0.tflite",
       "tflite_int8_path": "/home/azureuser/yamnet/model_store/releases/v1.0.0/chatak_yamnet_v1.0.0_int8.tflite",
       "dataset": "/home/azureuser/simulator/outputs/yamnet_datasets/_staged/yamnet_train_001_20260414_060026_ab50f090",
-      "deployed": true,
+      "deployed": false,
       "version": "v1.0.0",
       "exported_at": "20260414_060858",
       "nickname": "ODAS only dataset\u2014 best so far, 63.6% (deployed)"
@@ -229,7 +229,7 @@
       "tflite_path": "/home/azureuser/yamnet/model_store/releases/v1.0.0/chatak_yamnet_v1.0.0.tflite",
       "tflite_int8_path": "/home/azureuser/yamnet/model_store/releases/v1.0.0/chatak_yamnet_v1.0.0_int8.tflite",
       "dataset": "/home/azureuser/simulator/outputs/gt_datasets/gt_FixedAmbient_20260426",
-      "deployed": true,
+      "deployed": false,
       "version": "v1.0.0",
       "exported_at": "20260426_055018"
     },
@@ -252,7 +252,7 @@
       "tflite_path": "/Users/abhinav/research/yamnet/model_store/releases/v2.0.0-specaug/chatak_yamnet_v2.0.0-specaug.tflite",
       "tflite_int8_path": null,
       "dataset": "/Users/abhinav/research/experiments/corpus (7251 post-ODAS samples, 4 ambient envs, 3 SNRs)",
-      "deployed": false,
+      "deployed": true,
       "version": "v2.0.0-specaug",
       "exported_at": "20260630",
       "metrics": {
@@ -272,6 +272,6 @@
       "notes": "separate experiments/ track; breaks ~0.50 ceiling via SpecAugment"
     }
   ],
-  "active_model": "fixed-ambient-ele-fg-dr",
+  "active_model": "chatak_yamnet_specaug_ft",
   "_comment": "Managed by training/train_yamnet.py and training/export_finetuned.py. Binary model files live in model_store/releases/ (gitignored). Only this registry is tracked."
 }
